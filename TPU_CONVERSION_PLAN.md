@@ -2,14 +2,14 @@
 
 ## 1. Objective
 
-The primary goal is to adapt the NanoChat training pipeline to run efficiently on Google Cloud TPUs. This conversion will focus on leveraging JAX for the training loop and data parallelism while keeping the core `nn.Module` model definition in PyTorch. This hybrid approach, utilizing `torch_xla`, aims to minimize code changes to the model architecture while unlocking the performance benefits of TPUs.
+The primary goal is to adapt the NanoChat training pipeline to run efficiently on Google Cloud TPUs. This conversion will focus on leveraging JAX for the training loop and data parallelism while keeping the core `nn.Module` model definition in PyTorch. This hybrid approach, utilizing `torchax`, aims to minimize code changes to the model architecture while unlocking the performance benefits of TPUs.
 
-## 2. Technical Approach: PyTorch/XLA Bridge
+## 2. Technical Approach: PyTorch/JAX Bridge
 
-We will use the `torch_xla` library to bridge PyTorch and JAX. The strategy is as follows:
+We will use the `torchax` library to bridge PyTorch and JAX. The strategy is as follows:
 
-1.  **Model Definition:** The `GPT` model in `nanochat/gpt.py`, which is an `nn.Module`, will remain unchanged.
-2.  **Model Loading:** We will load the PyTorch model and its weights directly into a JAX-compatible format. `torch_xla` provides utilities for this.
+1.  **Model Definition:** The `GPT` model in `nanochat/gpt.py`, which is an `nn.Module`, will remain unchanged. We may explore using `nng` for model definition in future iterations, but for this conversion, we will leverage the existing PyTorch model.
+2.  **Model Loading:** We will load the PyTorch model and its weights directly into a JAX-compatible format. `torchax` provides utilities for this.
 3.  **Training Loop:** The training loops in `scripts/base_train.py`, `scripts/mid_train.py`, `scripts/chat_sft.py`, and `scripts/chat_rl.py` will be rewritten in JAX.
 4.  **Data Parallelism:** JAX's `pmap` (parallel map) will be used to distribute the training across multiple TPU cores.
 
@@ -21,7 +21,7 @@ The conversion will be executed in the following phases:
 
 ### Phase 1: Environment and Setup
 
-*   **Dependencies:** Add `jax`, `flax`, `optax`, and `torch_xla` to `pyproject.toml`.
+*   **Dependencies:** Add `jax`, `flax`, `optax`, and `torchax` to `pyproject.toml`.
 *   **TPU Environment:** Ensure the development environment is configured to access and utilize TPUs.
 *   **New Scripts:** Create new training scripts for the JAX implementation, e.g., `scripts/base_train_jax.py`, to work in parallel with the existing CUDA-based scripts.
 
@@ -73,7 +73,7 @@ The conversion will be executed in the following phases:
 
 ### Modified Files
 
-*   `pyproject.toml`: To add new JAX and `torch_xla` dependencies.
+*   `pyproject.toml`: To add new JAX and `torchax` dependencies.
 *   `nanochat/dataloader.py`: May need modifications to support JAX data sharding, or a new JAX-specific dataloader will be created.
 *   `.gitignore`: To exclude JAX-related artifacts.
 

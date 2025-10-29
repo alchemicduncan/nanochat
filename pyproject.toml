@@ -61,18 +61,26 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"  
 explicit = true
 
-[project.optional-dependencies]  
-cpu = [  
-    "torch>=2.8.0",  
-]  
-gpu = [  
-    "torch>=2.8.0",  
-]  
-  
-[tool.uv]  
-conflicts = [  
-    [  
-        { extra = "cpu" },  
-        { extra = "gpu" },  
-    ],  
-]  
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.8.0",
+]
+gpu = [
+    "torch>=2.8.0",
+]
+tpu = [
+    "torch>=2.8.0",
+    "torchax>=0.2.0",
+    "jax>=0.4.23",
+    "flax>=0.8.2",
+    "optax>=0.2.2",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "gpu" },
+        { extra = "tpu" },
+    ],
+]
