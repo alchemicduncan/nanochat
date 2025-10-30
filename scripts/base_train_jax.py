@@ -19,6 +19,9 @@ import optax
 import torchax
 import wandb
 
+# Enable torchax globally for PyTorch-JAX interoperability
+torchax.enable_globally()
+
 from nanochat.gpt import GPT, GPTConfig
 from nanochat.dataloader_jax import tokenizing_distributed_data_loader
 from nanochat.common import compute_init, compute_cleanup, print0, DummyWandb, print_banner, get_base_dir, autodetect_device_type
@@ -114,7 +117,7 @@ model_config = GPTConfig(**model_config_kwargs)
 pt_model = GPT(model_config)
 pt_model.init_weights()
 # Wrap the PyTorch model with torchax
-model = torchax.Module(pt_model)
+model = pt_model.to('jax')
 num_params = sum(p.numel() for p in pt_model.parameters())
 print0(f"Number of parameters: {num_params:,}")
 num_flops_per_token = pt_model.estimate_flops()
