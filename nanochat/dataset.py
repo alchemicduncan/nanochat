@@ -13,6 +13,7 @@ import time
 import requests
 import pyarrow.parquet as pq
 from multiprocessing import Pool
+import tensorflow as tf # Import tensorflow
 
 from nanochat.common import get_base_dir
 
@@ -40,21 +41,54 @@ def list_parquet_files(data_dir=None):
     parquet_paths = [os.path.join(data_dir, f) for f in parquet_files]
     return parquet_paths
 
+def _read_parquet_row_group(filepath, rg_idx):
+    # Helper function to read a single row group
+    pf = pq.ParquetFile(filepath.decode('utf-8')) # Decode filepath from bytes
+    rg = pf.read_row_group(rg_idx)
+    texts = rg.column('text').to_pylist()
+    return texts
+
 def parquets_iter_batched(split, start=0, step=1):
     """
-    Iterate through the dataset, in batches of underlying row_groups for efficiency.
+    Returns a tf.data.Dataset that iterates through the dataset,
+    in batches of underlying row_groups for efficiency.
     - split can be "train" or "val". the last parquet file will be val.
     - start/step are useful for skipping rows in DDP. e.g. start=rank, step=world_size
     """
     assert split in ["train", "val"], "split must be 'train' or 'val'"
     parquet_paths = list_parquet_files()
     parquet_paths = parquet_paths[:-1] if split == "train" else parquet_paths[-1:]
-    for filepath in parquet_paths:
-        pf = pq.ParquetFile(filepath)
-        for rg_idx in range(start, pf.num_row_groups, step):
-            rg = pf.read_row_group(rg_idx)
-            texts = rg.column('text').to_pylist()
-            yield texts
+
+    # Create a dataset of filepaths
+    filepath_dataset = tf.data.Dataset.from_tensor_slices(parquet_paths)
+
+    def _process_file(filepath):
+        # Read the number of row groups in the file
+        pf = pq.ParquetFile(filepath.decode('utf-8'))
+        num_row_groups = pf.num_row_groups
+
+        # Create a dataset of row group indices for this file
+        rg_indices = tf.data.Dataset.range(start, num_row_groups, step)
+
+        # Map each row group index to its content
+        return rg_indices.map(
+            lambda rg_idx: tf.py_function(
+                _read_parquet_row_group,
+                inp=[filepath, rg_idx],
+                Tout=tf.string
+            ),
+            num_parallel_calls=tf.data.AUTOTUNE
+        )
+
+    # Interleave reading from multiple files
+    dataset = filepath_dataset.interleave(
+        _process_file,
+        cycle_length=tf.data.AUTOTUNE,
+        num_parallel_calls=tf.data.AUTOTUNE,
+        deterministic=False # Allow non-deterministic interleaving for performance
+    )
+
+    return dataset
 
 # -----------------------------------------------------------------------------
 def download_single_file(index):
