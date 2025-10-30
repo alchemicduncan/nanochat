@@ -70,10 +70,10 @@ gpu = [
 ]
 tpu = [
     "torch>=2.8.0",
-    "torchax>=0.2.0",
-    "jax>=0.4.23",
-    "flax>=0.8.2",
-    "optax>=0.2.2",
+    "torchax>=0.0.7",
+    "jax",
+    "flax",
+    "optax",
 ]
 
 [tool.uv]
