@@ -13,7 +13,8 @@ import time
 import requests
 import pyarrow.parquet as pq
 from multiprocessing import Pool
-import tensorflow as tf # Import tensorflow
+import tensorflow as tf
+import numpy as np
 
 from nanochat.common import get_base_dir
 
@@ -41,17 +42,21 @@ def list_parquet_files(data_dir=None):
     parquet_paths = [os.path.join(data_dir, f) for f in parquet_files]
     return parquet_paths
 
-def _read_parquet_row_group(filepath, rg_idx):
-    # Helper function to read a single row group
-    pf = pq.ParquetFile(filepath.decode('utf-8')) # Decode filepath from bytes
+def _read_row_group_py(filepath_tensor, rg_idx_tensor):
+    """
+    This function will be wrapped in tf.py_function, so its inputs will be EagerTensors.
+    It reads a specific row group from a parquet file and returns the texts.
+    """
+    filepath = filepath_tensor.numpy().decode('utf-8')
+    rg_idx = rg_idx_tensor.numpy()
+    pf = pq.ParquetFile(filepath)
     rg = pf.read_row_group(rg_idx)
     texts = rg.column('text').to_pylist()
     return texts
 
 def parquets_iter_batched(split, start=0, step=1):
     """
-    Returns a tf.data.Dataset that iterates through the dataset,
-    in batches of underlying row_groups for efficiency.
+    Returns a tf.data.Dataset that iterates through the documents in the dataset.
     - split can be "train" or "val". the last parquet file will be val.
     - start/step are useful for skipping rows in DDP. e.g. start=rank, step=world_size
     """
@@ -62,31 +67,38 @@ def parquets_iter_batched(split, start=0, step=1):
     # Create a dataset of filepaths
     filepath_dataset = tf.data.Dataset.from_tensor_slices(parquet_paths)
 
-    def _process_file(filepath):
-        # Read the number of row groups in the file
-        pf = pq.ParquetFile(filepath.decode('utf-8'))
-        num_row_groups = pf.num_row_groups
+    def _get_row_groups_dataset(filepath):
+        # This function is traced by TF AutoGraph.
+        # We need to use tf.py_function to call pyarrow code to get the number of row groups.
+        def get_num_rows_py(fp):
+            pf = pq.ParquetFile(fp.numpy().decode('utf-8'))
+            return np.int64(pf.num_row_groups)
 
+        num_row_groups = tf.py_function(get_num_rows_py, inp=[filepath], Tout=tf.int64)
+        
         # Create a dataset of row group indices for this file
         rg_indices = tf.data.Dataset.range(start, num_row_groups, step)
+        
+        # Pair each index with the filepath
+        filepath_ds = tf.data.Dataset.from_tensors(filepath).repeat()
+        return tf.data.Dataset.zip((filepath_ds, rg_indices))
 
-        # Map each row group index to its content
-        return rg_indices.map(
-            lambda rg_idx: tf.py_function(
-                _read_parquet_row_group,
-                inp=[filepath, rg_idx],
-                Tout=tf.string
-            ),
-            num_parallel_calls=tf.data.AUTOTUNE
-        )
+    # Use flat_map to create a dataset of (filepath, rg_idx) pairs for all files
+    dataset = filepath_dataset.flat_map(_get_row_groups_dataset)
 
-    # Interleave reading from multiple files
-    dataset = filepath_dataset.interleave(
-        _process_file,
-        cycle_length=tf.data.AUTOTUNE,
-        num_parallel_calls=tf.data.AUTOTUNE,
-        deterministic=False # Allow non-deterministic interleaving for performance
+    # Now map over this dataset to read the actual data
+    dataset = dataset.map(
+        lambda filepath, rg_idx: tf.py_function(
+            _read_row_group_py,
+            inp=[filepath, rg_idx],
+            Tout=tf.string
+        ),
+        num_parallel_calls=tf.data.AUTOTUNE
     )
+    
+    # The output is now a dataset of text batches (one batch per row group).
+    # We unbatch to get a stream of individual documents.
+    dataset = dataset.unbatch()
 
     return dataset
 
