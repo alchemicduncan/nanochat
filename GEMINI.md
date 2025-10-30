@@ -34,10 +34,10 @@ Here are some ideas for extending the NanoChat repository:
 
 ### JAX Conversion
 
-Converting the project to JAX can provide significant performance improvements, especially on TPUs.
+Converting the project to JAX can provide significant performance improvements, especially on TPUs. The `torchax` library is used to facilitate this with minimal code changes.
 
-*   **Key files to modify:** `nanochat/gpt.py`, `nanochat/engine.py`, `nanochat/adamw.py`.
-*   **Considerations:** You will need to replace PyTorch tensors and operations with their JAX equivalents. Pay close attention to JAX's functional programming paradigm.
+*   **Key files to modify:** `nanochat/gpt.py`, `nanochat/engine.py`, `nanochat/adamw.py`, and any training scripts (e.g., `scripts/base_train_jax.py`).
+*   **Considerations:** Instead of manually replacing PyTorch operations, `torchax` allows you to run PyTorch code on a JAX backend. This is achieved by enabling `torchax` globally at the start of your script with `torchax.enable_globally()` and then moving your PyTorch model and tensors to the `'jax'` device (e.g., `model.to('jax')`). For the most up-to-date usage and documentation, please refer to the [official torchax repository](https://github.com/google/torchax).
 
 ### Running on TPUs
 
