@@ -26,27 +26,22 @@ def tokenizing_distributed_data_loader(B, T, split, tokenizer_threads=4, tokeniz
     # Batch documents for tokenization efficiency
     dataset = dataset.batch(tokenizer_batch_size)
 
-    # Tokenize the documents
-    def _tokenize_function(documents_tensor):
-        # documents_tensor is a 1D tensor of strings. Decode them for the tokenizer.
+    # Tokenize the documents and flatten into a stream of tokens
+    def _tokenize_py_function(documents_tensor):
         documents_np = [d.decode('utf-8') for d in documents_tensor.numpy()]
         token_lists = tokenizer.encode(documents_np, prepend=bos_token, num_threads=tokenizer_threads)
-        # Flatten the list of lists into a single list of tokens
         flat_tokens = [token for sublist in token_lists for token in sublist]
         return np.array(flat_tokens, dtype=np.int32)
 
-    # Apply the tokenization function
-    dataset = dataset.map(
-        lambda documents: tf.py_function(
-            _tokenize_function,
-            inp=[documents],
+    def tokenize_batch_to_dataset(documents_tensor):
+        tokens_array = tf.py_function(
+            _tokenize_py_function,
+            inp=[documents_tensor],
             Tout=tf.int32
-        ),
-        num_parallel_calls=tf.data.AUTOTUNE
-    )
-    
-    # Flatten the dataset of token arrays into a single stream of tokens
-    dataset = dataset.flat_map(lambda tokens: tf.data.Dataset.from_tensor_slices(tokens))
+        )
+        return tf.data.Dataset.from_tensor_slices(tokens_array)
+
+    dataset = dataset.flat_map(tokenize_batch_to_dataset)
 
     # Batch the tokens into sequences of length T+1
     dataset = dataset.batch(T + 1, drop_remainder=True)
