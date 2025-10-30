@@ -48,8 +48,8 @@ def tokenizing_distributed_data_loader(B, T, split, tokenizer_threads=4, tokeniz
         tokens = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
         
         # Create the inputs/targets as 1D numpy arrays
-        inputs_np = tokens[:-1]
-        targets_np = tokens[1:]
+        inputs_np = tokens[:-1].copy()
+        targets_np = tokens[1:].copy()
         
         # Reshape to 2D
         inputs_np = inputs_np.reshape(B, T)
