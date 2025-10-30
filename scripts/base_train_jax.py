@@ -114,7 +114,7 @@ model_config = GPTConfig(**model_config_kwargs)
 pt_model = GPT(model_config)
 pt_model.init_weights()
 # Wrap the PyTorch model with torchax
-model = torchax.JaxModule(pt_model)
+model = torchax.Module(pt_model)
 num_params = sum(p.numel() for p in pt_model.parameters())
 print0(f"Number of parameters: {num_params:,}")
 num_flops_per_token = pt_model.estimate_flops()
