@@ -46,8 +46,8 @@ def tokenizing_distributed_data_loader(B, T, split, tokenizer_threads=4, tokeniz
         num_parallel_calls=tf.data.AUTOTUNE
     )
     
-    # Flatten the dataset of token lists into a single stream of tokens
-    dataset = dataset.flat_map(lambda tokens: tf.data.Dataset.from_tensor_slices(tokens))
+    # Unbatch the token arrays into a single stream of tokens
+    dataset = dataset.unbatch()
 
     # Batch the tokens into sequences of length T+1
     dataset = dataset.batch(T + 1, drop_remainder=True)
