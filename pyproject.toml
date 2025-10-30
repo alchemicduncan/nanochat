@@ -74,6 +74,7 @@ tpu = [
     "jax[tpu]",
     "flax",
     "optax",
+    "tensorflow-cpu",
 ]
 
 [tool.uv]

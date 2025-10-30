@@ -1,7 +1,7 @@
-from collections import deque
 import jax
 import jax.numpy as jnp
 import numpy as np
+import tensorflow as tf
 
 from nanochat.dataset import parquets_iter_batched
 from nanochat.tokenizer import get_tokenizer
@@ -15,49 +15,56 @@ def tokenizing_distributed_data_loader(B, T, split, tokenizer_threads=4, tokeniz
         raise ValueError(f"Batch size ({B}) must be divisible by the number of devices ({num_devices})")
     
     device_batch_size = B // num_devices
-    needed_tokens = B * T + 1 # +1 is because we also need the target at the last token
     
     # get the tokenizer and the bos token
     tokenizer = get_tokenizer()
     bos_token = tokenizer.get_bos_token_id()
-    
-    # token_buffer holds the tokens for one iteration
-    token_buffer = deque()
 
-    # infinite iterator over document batches
-    def document_batches():
+    def token_generator():
+        # This generator will be wrapped by tf.data.Dataset
+        
+        # infinite iterator over document batches
         while True:
             # Each process will read a different slice of the data
             start_index = jax.process_index()
             step_size = jax.process_count()
             for batch in parquets_iter_batched(split=split, start=start_index, step=step_size):
-                for i in range(0, len(batch), tokenizer_batch_size):
-                    yield batch[i:i+tokenizer_batch_size]
+                # Tokenize the documents in parallel
+                token_lists = tokenizer.encode(batch, prepend=bos_token, num_threads=tokenizer_threads)
+                for tokens in token_lists:
+                    for token in tokens:
+                        yield token
 
-    batches = document_batches()
+    # Create a tf.data.Dataset from the generator
+    dataset = tf.data.Dataset.from_generator(
+        token_generator,
+        output_signature=tf.TensorSpec(shape=(), dtype=tf.int32)
+    )
 
-    while True:
-        # Accumulate enough tokens for one iteration before yielding.
-        while len(token_buffer) < needed_tokens:
-            doc_batch = next(batches)
-            token_lists = tokenizer.encode(doc_batch, prepend=bos_token, num_threads=tokenizer_threads)
-            for tokens in token_lists:
-                token_buffer.extend(tokens)
-        
-        # Move tokens from the deque into a numpy array
-        tokens = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
-        
-        # Create the inputs/targets as 1D numpy arrays
-        inputs_np = tokens[:-1].copy()
-        targets_np = tokens[1:].copy()
-        
-        # Reshape to 2D
-        inputs_np = inputs_np.reshape(B, T)
-        targets_np = targets_np.reshape(B, T)
+    # Batch the tokens into sequences of length T+1
+    dataset = dataset.batch(T + 1, drop_remainder=True)
 
-        # Reshape for sharding across devices
-        inputs_sharded = inputs_np.reshape(num_devices, device_batch_size, T)
-        targets_sharded = targets_np.reshape(num_devices, device_batch_size, T)
-        
-        # Yield JAX arrays
-        yield jnp.array(inputs_sharded), jnp.array(targets_sharded)
+    # Create inputs and targets
+    def create_inputs_targets(tokens):
+        inputs = tokens[:-1]
+        targets = tokens[1:]
+        return inputs, targets
+
+    dataset = dataset.map(create_inputs_targets, num_parallel_calls=tf.data.AUTOTUNE)
+
+    # Batch again to create the final batch of size B
+    dataset = dataset.batch(B, drop_remainder=True)
+
+    # Shard the data across devices
+    def shard_data(inputs, targets):
+        inputs = tf.reshape(inputs, (num_devices, device_batch_size, T))
+        targets = tf.reshape(targets, (num_devices, device_batch_size, T))
+        return inputs, targets
+
+    dataset = dataset.map(shard_data, num_parallel_calls=tf.data.AUTOTUNE)
+
+    # Prefetch to overlap data loading with training
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
+    # Return an iterator that yields JAX arrays
+    return dataset.as_numpy_iterator()
