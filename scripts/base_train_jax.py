@@ -172,7 +172,7 @@ build_val_loader = lambda: tokenizing_distributed_data_loader(total_batch_size, 
 # JAX training step
 def train_step(state, batch):
     def loss_fn(params):
-        logits = state.apply_fn({'params': params}, batch['inputs'])
+        logits = state.apply_fn(params, batch['inputs'])
         loss = optax.softmax_cross_entropy_with_integer_labels(
             logits=logits.reshape(-1, logits.shape[-1]),
             labels=batch['targets'].reshape(-1)
@@ -191,7 +191,7 @@ p_train_step = jax.pmap(train_step, axis_name='batch')
 def jax_sample_next_token(params, apply_fn, input_ids, rng_key, temperature=1.0, top_k=None):
     # input_ids: (num_devices, 1, T)
     # logits: (num_devices, 1, vocab_size)
-    logits = apply_fn({'params': params}, input_ids)
+    logits = apply_fn(params, input_ids)
     logits = logits[:, -1, :]
 
     if top_k is not None:
@@ -221,10 +221,8 @@ total_training_time = 0 # total wall-clock time of training
 # Create and initialize the training state
 key = jax.random.PRNGKey(0)
 # Initialize model parameters properly
-# The dummy input needs to be sharded across devices for pmap
-dummy_input = jnp.ones((jax.local_device_count(), device_batch_size, max_seq_len), dtype=jnp.int32)
-params = model.init_with_output(key, dummy_input[0])['params']
-state = TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+params, apply_fn = torchax.extract_jax(model)
+state = TrainState.create(apply_fn=apply_fn, params=params, tx=tx)
 
 # Replicate the state across devices
 state = flax.jax_utils.replicate(state)
@@ -235,7 +233,7 @@ x, y = next(train_iter) # kick off load of the very first batch of data
 # JAX-compatible evaluate_bpb function
 @jax.jit
 def jax_evaluate_bpb(params, apply_fn, val_batch, token_bytes_val):
-    logits = apply_fn({'params': params}, val_batch['inputs'])
+    logits = apply_fn(params, val_batch['inputs'])
     loss = optax.softmax_cross_entropy_with_integer_labels(
         logits=logits.reshape(-1, logits.shape[-1]),
         labels=val_batch['targets'].reshape(-1)
