@@ -227,9 +227,6 @@ state = TrainState.create(apply_fn=apply_fn, params=params, tx=tx)
 # Replicate the state across devices
 state = flax.jax_utils.replicate(state)
 
-train_iter = iter(train_loader)
-x, y = next(train_iter) # kick off load of the very first batch of data
-
 # JAX-compatible evaluate_bpb function
 @jax.jit
 def jax_evaluate_bpb(params, apply_fn, val_batch, token_bytes_val):
@@ -244,7 +241,14 @@ def jax_evaluate_bpb(params, apply_fn, val_batch, token_bytes_val):
     bpb = (total_loss / valid_tokens) / jnp.log(2.0) # bits per byte
     return bpb
 
-for step in range(num_iterations + 1):
+train_iter = iter(train_loader)
+for step, (x_ro, y_ro) in enumerate(train_iter):
+    if step > num_iterations:
+        break
+    
+    # Copy the data to make it writable
+    x, y = x_ro.copy(), y_ro.copy()
+
     last_step = step == num_iterations
     flops_so_far = num_flops_per_token * total_batch_size * step
 
@@ -253,8 +257,10 @@ for step in range(num_iterations + 1):
         val_loader = build_val_loader()
         eval_steps = eval_tokens // (total_batch_size * jax.device_count())
         val_bpbs = []
+        val_iter = iter(val_loader)
         for _ in range(eval_steps):
-            val_x, val_y = next(val_loader)
+            val_x_ro, val_y_ro = next(val_iter)
+            val_x, val_y = val_x_ro.copy(), val_y_ro.copy()
             val_batch = {'inputs': val_x, 'targets': val_y}
             # pmap over the evaluation function
             sharded_bpb = jax.pmap(jax_evaluate_bpb, axis_name='batch')(state.params, state.apply_fn, val_batch, token_bytes)
@@ -322,8 +328,8 @@ for step in range(num_iterations + 1):
     for micro_step in range(grad_accum_steps):
         batch = {'inputs': x, 'targets': y}
         state, loss, grads = p_train_step(state, batch)
-        x, y = next(train_iter) # prefetch the next batch while the GPU is busy with forward/backward
-
+        # The new data is fetched at the top of the loop
+    
     t1 = time.time()
     dt = t1 - t0
     # -------------------------------------------------------------------------
