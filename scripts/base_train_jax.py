@@ -63,3 +63,37 @@ print0("Wrapping model with torchax and extracting JAX parameters...")
 model = pt_model.to('jax')
 params, apply_fn = torchax.extract_jax(model)
 print0("Model loaded and parameters extracted successfully.")
+
+# --- Optimizer and TrainState ---
+class TrainState(train_state.TrainState):
+    # A simple extension of TrainState to hold any additional state we might need
+    pass
+
+def create_train_state(params, apply_fn):
+    """Creates initial TrainState."""
+    # We will use a simple constant learning rate for now
+    learning_rate = 0.004 # A common default
+    tx = optax.adamw(learning_rate=learning_rate)
+    return TrainState.create(apply_fn=apply_fn, params=params, tx=tx)
+
+# --- Main Execution ---
+def main():
+    print0("\n--- Initializing Optimizer and TrainState ---")
+    state = create_train_state(params, apply_fn)
+    state = flax.jax_utils.replicate(state)
+    print0("✅ Optimizer and TrainState initialized and replicated successfully.")
+
+    print0("\n--- Initializing Data Loader ---")
+    train_loader = tokenizing_distributed_data_loader(
+        B=total_batch_size,
+        T=max_seq_len,
+        split="train"
+    )
+    
+    print0("Fetching one batch to test the data pipeline...")
+    train_iter = iter(train_loader)
+    x, y = next(train_iter)
+    print0(f"✅ Successfully fetched one batch. Shape of x: {x.shape}, Shape of y: {y.shape}")
+
+if __name__ == "__main__":
+    main()
