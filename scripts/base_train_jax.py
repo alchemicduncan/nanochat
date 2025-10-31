@@ -85,7 +85,7 @@ def main():
 
     print0("\n--- Initializing Data Loader ---")
     train_loader = tokenizing_distributed_data_loader(
-        B=total_batch_size,
+        B=device_batch_size,
         T=max_seq_len,
         split="train"
     )
