@@ -2,12 +2,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import tensorflow as tf
+from collections import deque
 
 from nanochat.dataset import parquets_iter_batched
 from nanochat.tokenizer import get_tokenizer
 
 def tokenizing_distributed_data_loader(B, T, split, tokenizer_threads=4, tokenizer_batch_size=128):
-    """Stream pretraining text from parquet files, tokenize, yield training batches as JAX arrays."""
+    """
+    A simplified and robust data loader using a Python generator and tf.data.
+    """
     assert split in ["train", "val"], "split must be 'train' or 'val'"
     
     num_devices = jax.device_count()
@@ -16,45 +19,62 @@ def tokenizing_distributed_data_loader(B, T, split, tokenizer_threads=4, tokeniz
     
     device_batch_size = B // num_devices
     
-    # get the tokenizer and the bos token
     tokenizer = get_tokenizer()
     bos_token = tokenizer.get_bos_token_id()
 
-    # Get the base tf.data.Dataset of raw text documents
-    dataset = parquets_iter_batched(split=split, start=jax.process_index(), step=jax.process_count())
+    def sequence_generator():
+        """
+        This generator yields token sequences of length T+1.
+        """
+        token_buffer = deque()
 
-    # Batch documents for tokenization efficiency
-    dataset = dataset.batch(tokenizer_batch_size)
+        # This inner generator yields batches of tokenized text
+        def _token_batch_generator():
+            # Each process reads a different slice of the data
+            text_batches = parquets_iter_batched(
+                split=split, 
+                start=jax.process_index(), 
+                step=jax.process_count()
+            )
+            for text_batch in text_batches:
+                token_lists = tokenizer.encode(text_batch, prepend=bos_token, num_threads=tokenizer_threads)
+                yield token_lists
 
-    # Tokenize the documents and flatten into a stream of tokens
-    def _tokenize_py_function(documents_tensor):
-        documents_np = [d.decode('utf-8') for d in documents_tensor.numpy()]
-        token_lists = tokenizer.encode(documents_np, prepend=bos_token, num_threads=tokenizer_threads)
-        flat_tokens = [token for sublist in token_lists for token in sublist]
-        return np.array(flat_tokens, dtype=np.int32)
+        token_batch_iter = _token_batch_generator()
 
-    def tokenize_batch_to_dataset(documents_tensor):
-        tokens_array = tf.py_function(
-            _tokenize_py_function,
-            inp=[documents_tensor],
-            Tout=tf.int32
-        )
-        return tf.data.Dataset.from_tensor_slices(tokens_array)
+        while True:
+            # Fill the buffer with enough tokens to extract at least one sequence
+            while len(token_buffer) < T + 1:
+                try:
+                    token_lists = next(token_batch_iter)
+                    for tokens in token_lists:
+                        token_buffer.extend(tokens)
+                except StopIteration:
+                    # This should not happen with an infinite dataset, but as a safeguard:
+                    if len(token_buffer) < T + 1:
+                        return # Not enough tokens left to form a full sequence
+                    break
+            
+            # Yield as many full sequences as possible from the buffer
+            while len(token_buffer) >= T + 1:
+                sequence = [token_buffer.popleft() for _ in range(T + 1)]
+                yield np.array(sequence, dtype=np.int32)
 
-    dataset = dataset.flat_map(tokenize_batch_to_dataset)
+    # Create the tf.data.Dataset from our sequence generator
+    dataset = tf.data.Dataset.from_generator(
+        sequence_generator,
+        output_signature=tf.TensorSpec(shape=(T + 1,), dtype=tf.int32)
+    )
 
-    # Batch the tokens into sequences of length T+1
-    dataset = dataset.batch(T + 1, drop_remainder=True)
-
-    # Create inputs and targets
-    def create_inputs_targets(tokens):
-        inputs = tokens[:-1]
-        targets = tokens[1:]
+    # Create inputs and targets (x, y)
+    def create_inputs_targets(sequence):
+        inputs = sequence[:-1]
+        targets = sequence[1:]
         return inputs, targets
 
     dataset = dataset.map(create_inputs_targets, num_parallel_calls=tf.data.AUTOTUNE)
 
-    # Batch again to create the final batch of size B
+    # Batch into the final global batch size
     dataset = dataset.batch(B, drop_remainder=True)
 
     # Reshape for per-device sharding
@@ -68,5 +88,4 @@ def tokenizing_distributed_data_loader(B, T, split, tokenizer_threads=4, tokeniz
     # Prefetch to overlap data loading with training
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
-    # Return an iterator that yields JAX arrays
     return dataset.as_numpy_iterator()
