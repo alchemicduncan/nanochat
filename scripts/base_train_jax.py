@@ -142,7 +142,7 @@ def main():
         
         # Gradient accumulation loop
         # Initialize gradients for accumulation
-        accumulated_grads = jax.tree_util.tree_map(jnp.zeros_like, flax.jax_utils.unreplicate(state.params))
+        accumulated_grads = jax.tree.map(jnp.zeros_like, flax.jax_utils.unreplicate(state.params))
         accumulated_loss = 0.0
 
         for _ in range(grad_accum_steps):
@@ -152,11 +152,11 @@ def main():
             
             # Accumulate gradients and loss
             # Grads are already averaged across devices, so we just need to sum them up
-            accumulated_grads = jax.tree_map(lambda acc, g: acc + g, accumulated_grads, grads)
+            accumulated_grads = jax.tree.map(lambda acc, g: acc + g, accumulated_grads, grads)
             accumulated_loss += loss.mean() # loss is replicated, take the mean
 
         # Average the accumulated gradients and loss
-        accumulated_grads = jax.tree_map(lambda g: g / grad_accum_steps, accumulated_grads)
+        accumulated_grads = jax.tree.map(lambda g: g / grad_accum_steps, accumulated_grads)
         accumulated_loss /= grad_accum_steps
         
         # Update the model weights
