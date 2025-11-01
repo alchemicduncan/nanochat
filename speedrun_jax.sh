@@ -59,12 +59,13 @@ wait $DATASET_DOWNLOAD_PID
 # Note: We are using depth=10 and max_seq_len=1024 to fit in memory
 python -m scripts.base_train_jax --depth=10 --max_seq_len=1024 --run=$WANDB_RUN
 
+# evaluate the model on a larger chunk of train/val data
+python -m scripts.base_loss_jax
+
 # -----------------------------------------------------------------------------
 # The following steps are commented out as they require JAX-specific implementations
 # that have not yet been created.
 
-# # evaluate the model on a larger chunk of train/val data and draw some samples
-# # torchrun --standalone --nproc_per_node=8 -m scripts.base_loss
 # # evaluate the model on CORE tasks
 # # torchrun --standalone --nproc_per_node=8 -m scripts.base_eval
 
