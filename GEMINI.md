@@ -64,6 +64,12 @@ Experimenting with different model architectures can lead to new discoveries and
 
 Welcome contributions to the NanoChat repository. If you have an experiment that you would like to share, please open a pull request with a clear description of your changes and results.
 
+# Core Mandates
+
+- **Conventions:** Rigorously adhere to existing project conventions when reading or modifying code. Analyze surrounding code, tests, and configuration first.
+- **File Modifications:** Original files must remain unchanged. New files should be created by copying and adapting existing ones to introduce new features or modifications.
+- **Libraries/Frameworks:** NEVER assume a library/framework is available or appropriate. Verify its established usage within the project (check imports, configuration files like 'package.json', 'Cargo.toml', 'requirements.txt', 'build.gradle', etc., or observe neighboring files) before employing it.
+
 ## Project Setup and Workflow
 
 This section provides an overview of the project's structure and the end-to-end workflow, primarily orchestrated by the `speedrun.sh` script. Understanding this process is key to experimenting with and extending NanoChat.
