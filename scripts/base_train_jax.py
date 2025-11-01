@@ -89,12 +89,11 @@ def train_step(state, batch):
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grads = grad_fn(state.params)
     
-    # Add pmean here for cross-device averaging
+    # Average loss and gradients across all devices
     loss = jax.lax.pmean(loss, axis_name='batch')
     grads = jax.lax.pmean(grads, axis_name='batch')
     
-    state = state.apply_gradients(grads=grads)
-    return state, loss
+    return loss, grads # Return loss and grads, state is updated outside
 
 p_train_step = jax.pmap(train_step, axis_name='batch')
 
@@ -111,10 +110,18 @@ def main():
     print0("✅ Optimizer and TrainState initialized and replicated successfully.")
 
     print0("\n--- Initializing Data Loader ---")
-    # Calculate the global batch size in terms of sequences
-    global_batch_sequences = device_batch_size * world_size
+    # Calculate the global batch size in terms of sequences for one forward/backward pass
+    global_micro_batch_sequences = device_batch_size * world_size
+    
+    # Calculate gradient accumulation steps
+    # total_batch_size is in tokens, so we calculate how many sequences that is
+    total_sequences = total_batch_size // max_seq_len
+    assert total_sequences % global_micro_batch_sequences == 0, "Total batch size in sequences must be divisible by the micro-batch size"
+    grad_accum_steps = total_sequences // global_micro_batch_sequences
+    print0(f"Using {grad_accum_steps} gradient accumulation steps.")
+
     train_loader = tokenizing_distributed_data_loader(
-        B=global_batch_sequences,
+        B=global_micro_batch_sequences,
         T=max_seq_len,
         split="train"
     )
@@ -129,16 +136,34 @@ def main():
 
     for step in range(num_iterations):
         t0 = time.time()
-        x, y = next(train_iter) # Fetch batch
-        batch = {'inputs': x.copy(), 'targets': y.copy()} # Ensure writable copies
-        state, loss = p_train_step(state, batch)
+        
+        # Gradient accumulation loop
+        # Initialize gradients for accumulation
+        accumulated_grads = jax.tree_util.tree_map(jnp.zeros_like, flax.jax_utils.unreplicate(state.params))
+        accumulated_loss = 0.0
+
+        for _ in range(grad_accum_steps):
+            x, y = next(train_iter) # Fetch micro-batch
+            batch = {'inputs': x.copy(), 'targets': y.copy()} # Ensure writable copies
+            loss, grads = p_train_step(state, batch)
+            
+            # Accumulate gradients and loss
+            # Grads are already averaged across devices, so we just need to sum them up
+            accumulated_grads = jax.tree_map(lambda acc, g: acc + g, accumulated_grads, grads)
+            accumulated_loss += loss.mean() # loss is replicated, take the mean
+
+        # Average the accumulated gradients and loss
+        accumulated_grads = jax.tree_map(lambda g: g / grad_accum_steps, accumulated_grads)
+        accumulated_loss /= grad_accum_steps
+        
+        # Update the model weights
+        state = state.apply_gradients(grads=accumulated_grads)
+        
         dt = time.time() - t0
         total_training_time += dt
 
         # Logging
-        # The loss is already averaged across devices, so we just take the mean of the sharded loss tensor
-        mean_loss = loss.mean()
-        smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * mean_loss.item()
+        smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * accumulated_loss.item()
         debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
         pct_done = 100 * (step + 1) / num_iterations
 
