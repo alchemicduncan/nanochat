@@ -88,6 +88,11 @@ def train_step(state, batch):
 
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grads = grad_fn(state.params)
+    
+    # Add pmean here for cross-device averaging
+    loss = jax.lax.pmean(loss, axis_name='batch')
+    grads = jax.lax.pmean(grads, axis_name='batch')
+    
     state = state.apply_gradients(grads=grads)
     return state, loss
 
@@ -131,7 +136,8 @@ def main():
         total_training_time += dt
 
         # Logging
-        mean_loss = jax.lax.pmean(loss, axis_name='batch').mean()
+        # The loss is already averaged across devices, so we just take the mean of the sharded loss tensor
+        mean_loss = loss.mean()
         smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * mean_loss.item()
         debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
         pct_done = 100 * (step + 1) / num_iterations
