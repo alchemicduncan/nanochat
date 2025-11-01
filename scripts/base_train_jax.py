@@ -28,7 +28,8 @@ print_banner()
 if jax.process_count() > 1:
     jax.distributed.initialize()
 master_process = jax.process_index() == 0
-print0(f"JAX process index: {jax.process_index()}, device count: {jax.device_count()}")
+world_size = jax.device_count()
+print0(f"JAX process index: {jax.process_index()}, device count: {world_size}")
 
 # --- Config ---
 depth = 20
@@ -71,13 +72,34 @@ class TrainState(train_state.TrainState):
 
 def create_train_state(params, apply_fn):
     """Creates initial TrainState."""
-    # We will use a simple constant learning rate for now
     learning_rate = 0.004 # A common default
     tx = optax.adamw(learning_rate=learning_rate)
     return TrainState.create(apply_fn=apply_fn, params=params, tx=tx)
 
+# --- JAX Training Step ---
+def train_step(state, batch):
+    def loss_fn(params):
+        logits = state.apply_fn(params, batch['inputs'])
+        loss = optax.softmax_cross_entropy_with_integer_labels(
+            logits=logits.reshape(-1, logits.shape[-1]),
+            labels=batch['targets'].reshape(-1)
+        ).mean()
+        return loss
+
+    grad_fn = jax.value_and_grad(loss_fn)
+    loss, grads = grad_fn(state.params)
+    state = state.apply_gradients(grads=grads)
+    return state, loss
+
+p_train_step = jax.pmap(train_step, axis_name='batch')
+
 # --- Main Execution ---
 def main():
+    # wandb logging init
+    run_name = os.environ.get("WANDB_RUN", "dummy")
+    use_dummy_wandb = run_name == "dummy" or not master_process
+    wandb_run = wandb.init(project="nanochat", name=run_name) if not use_dummy_wandb else type("DummyWandb", (object,), {"log": lambda *args, **kwargs: None, "finish": lambda: None})()
+
     print0("\n--- Initializing Optimizer and TrainState ---")
     state = create_train_state(params, apply_fn)
     state = flax.jax_utils.replicate(state)
@@ -85,15 +107,45 @@ def main():
 
     print0("\n--- Initializing Data Loader ---")
     train_loader = tokenizing_distributed_data_loader(
-        B=device_batch_size,
+        B=total_batch_size,
         T=max_seq_len,
         split="train"
     )
-    
-    print0("Fetching one batch to test the data pipeline...")
     train_iter = iter(train_loader)
-    x, y = next(train_iter)
-    print0(f"✅ Successfully fetched one batch. Shape of x: {x.shape}, Shape of y: {y.shape}")
+    print0("✅ Data loader initialized.")
+
+    print0("\n--- Starting Training Loop ---")
+    min_val_bpb = float("inf")
+    smooth_train_loss = 0.0
+    ema_beta = 0.9
+    total_training_time = 0.0
+
+    for step in range(num_iterations):
+        t0 = time.time()
+        x, y = next(train_iter) # Fetch batch
+        batch = {'inputs': x.copy(), 'targets': y.copy()} # Ensure writable copies
+        state, loss = p_train_step(state, batch)
+        dt = time.time() - t0
+        total_training_time += dt
+
+        # Logging
+        mean_loss = jax.lax.pmean(loss, axis_name='batch').mean()
+        smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * mean_loss.item()
+        debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
+        pct_done = 100 * (step + 1) / num_iterations
+
+        if master_process and (step % 10 == 0 or step == num_iterations - 1):
+            print0(f"Step {step:05d}/{num_iterations:05d} ({pct_done:.2f}%) | loss: {debiased_smooth_loss:.6f} | dt: {dt * 1000:.2f}ms")
+            wandb_run.log({
+                "step": step,
+                "train/loss": debiased_smooth_loss,
+                "total_training_time": total_training_time,
+            })
+        
+        # TODO: Add evaluation and checkpointing logic
+
+    print0("\n✅ Training loop finished.")
+    wandb_run.finish()
 
 if __name__ == "__main__":
     main()
