@@ -32,11 +32,11 @@ world_size = jax.device_count()
 print0(f"JAX process index: {jax.process_index()}, device count: {world_size}")
 
 # --- Config ---
-depth = 20
+depth = 10
 max_seq_len = 2048
 total_batch_size = 524288
 num_iterations = 21400 # From previous logs
-device_batch_size = 8 # Per-device batch size
+device_batch_size = 1 # Per-device batch size
 
 # --- Model Initialization ---
 print0("Initializing model...")
