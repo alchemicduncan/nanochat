@@ -36,7 +36,7 @@ depth = 20
 max_seq_len = 2048
 total_batch_size = 524288
 num_iterations = 21400 # From previous logs
-device_batch_size = 32 # Per-device batch size
+device_batch_size = 8 # Per-device batch size
 
 # --- Model Initialization ---
 print0("Initializing model...")
