@@ -106,8 +106,10 @@ def main():
     print0("✅ Optimizer and TrainState initialized and replicated successfully.")
 
     print0("\n--- Initializing Data Loader ---")
+    # Calculate the global batch size in terms of sequences
+    global_batch_sequences = device_batch_size * world_size
     train_loader = tokenizing_distributed_data_loader(
-        B=total_batch_size,
+        B=global_batch_sequences,
         T=max_seq_len,
         split="train"
     )
