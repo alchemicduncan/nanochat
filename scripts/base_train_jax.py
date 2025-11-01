@@ -12,6 +12,7 @@ import flax
 import optax
 import torchax
 import wandb
+import torch 
 from flax.training import train_state
 
 # Enable torchax globally for PyTorch-JAX interoperability
@@ -56,9 +57,11 @@ model_config_kwargs = dict(
     n_kv_head=num_kv_heads,
     n_embd=model_dim
 )
+
 model_config = GPTConfig(**model_config_kwargs)
 pt_model = GPT(model_config)
 pt_model.init_weights()
+pt_model = pt_model.to(dtype=torch.bfloat16) # Cast model to bfloat16
 
 print0("Wrapping model with torchax and extracting JAX parameters...")
 model = pt_model.to('jax')
