@@ -106,7 +106,7 @@ def main():
     # wandb logging init
     run_name = os.environ.get("WANDB_RUN", "dummy")
     use_dummy_wandb = run_name == "dummy" or not master_process
-    wandb_run = wandb.init(project="nanochat", name=run_name) if not use_dummy_wandb else type("DummyWandb", (object,), {"log": lambda *args, **kwargs: None, "finish": lambda: None})()
+    wandb_run = wandb.init(project="nanochat", name=run_name) if not use_dummy_wandb else type("DummyWandb", (object,), {"log": lambda *args, **kwargs: None, "finish": lambda *args, **kwargs: None})()
 
     print0("\n--- Initializing Optimizer and TrainState ---")
     state = create_train_state(params, apply_fn)
