@@ -20,6 +20,7 @@ from nanochat.common import print0, print_banner, get_base_dir
 from nanochat.gpt_nnx import GPT, GPTConfig
 from nanochat.tokenizer import get_tokenizer
 from nanochat.dataloader_jax import tokenizing_distributed_data_loader
+from nanochat.checkpoint_manager_nnx import save_checkpoint
 
 print_banner()
 
@@ -147,7 +148,13 @@ def main():
                 "total_training_time": total_training_time,
             })
         
-        # TODO: Add evaluation and checkpointing logic
+        # Checkpointing logic
+        if master_process and (step % 1000 == 0 or step == num_iterations - 1):
+            checkpoint_dir = os.path.join(get_base_dir(), "base_checkpoints", f"d{depth}")
+            # We need to unreplicate the model and optimizer_state before saving
+            unreplicated_model = flax.jax_utils.unreplicate(model)
+            unreplicated_optimizer_state = flax.jax_utils.unreplicate(optimizer_state)
+            save_checkpoint(checkpoint_dir, step, unreplicated_model, unreplicated_optimizer_state, {"model_config": model_config_kwargs})
 
     print0("\n✅ Training loop finished.")
     wandb_run.finish()
