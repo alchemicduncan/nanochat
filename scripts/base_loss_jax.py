@@ -6,14 +6,10 @@ import os
 import jax
 import jax.numpy as jnp
 import optax
-import torchax
-from flax.training import train_state
-
-# Enable torchax globally for PyTorch-JAX interoperability
-torchax.enable_globally()
+from flax.experimental import nnx
 
 from nanochat.common import print0, print_banner
-from nanochat.gpt import GPT, GPTConfig
+from nanochat.gpt_nnx import GPT, GPTConfig
 from nanochat.tokenizer import get_tokenizer
 from nanochat.dataloader_jax import tokenizing_distributed_data_loader
 
@@ -54,23 +50,13 @@ model_config_kwargs = dict(
     n_embd=model_dim
 )
 model_config = GPTConfig(**model_config_kwargs)
-pt_model = GPT(model_config)
-pt_model.init_weights()
-pt_model = pt_model.to(dtype=jnp.bfloat16)
-
-print0("Wrapping model with torchax and extracting JAX parameters...")
-model = pt_model.to('jax')
-params, apply_fn = torchax.extract_jax(model)
-print0("Model loaded and parameters extracted successfully.")
+rngs = nnx.Rngs(0)
+model = GPT(model_config, rngs=rngs)
+print0("NNX model initialized successfully.")
 
 # --- JAX Evaluation Step ---
-def eval_step(params, batch):
-    logits = apply_fn(params, batch['inputs'])
-    loss = optax.softmax_cross_entropy_with_integer_labels(
-        logits=logits.reshape(-1, logits.shape[-1]),
-        labels=batch['targets'].reshape(-1)
-    ).mean()
-    return loss
+def eval_step(model, batch):
+    return model(batch['inputs'], targets=batch['targets'])
 
 p_eval_step = jax.pmap(eval_step, axis_name='batch')
 
@@ -87,8 +73,8 @@ def main():
     print0("✅ Data loader initialized.")
 
     print0("\n--- Starting Evaluation ---")
-    # Replicate parameters across devices
-    replicated_params = jax.device_put_replicated(params, jax.local_devices())
+    # Replicate model across devices
+    replicated_model = jax.device_put_replicated(model, jax.local_devices())
     
     total_loss = 0.0
     num_batches = eval_tokens // (global_batch_sequences * max_seq_len)
@@ -96,7 +82,7 @@ def main():
     for i in range(num_batches):
         x, y = next(val_iter)
         batch = {'inputs': x.copy(), 'targets': y.copy()}
-        loss = p_eval_step(replicated_params, batch)
+        loss = p_eval_step(replicated_model, batch)
         total_loss += loss.mean().item()
         print0(f"Batch {i+1}/{num_batches}, Loss: {loss.mean().item():.4f}")
 

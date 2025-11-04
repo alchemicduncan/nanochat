@@ -9,17 +9,15 @@ import time
 import jax
 import jax.numpy as jnp
 import flax
+from flax.experimental import nnx
 import optax
-import torchax
 import wandb
-import torch 
-from flax.training import train_state
 
 # Enable torchax globally for PyTorch-JAX interoperability
 torchax.enable_globally()
 
 from nanochat.common import print0, print_banner, get_base_dir
-from nanochat.gpt import GPT, GPTConfig
+from nanochat.gpt_nnx import GPT, GPTConfig
 from nanochat.tokenizer import get_tokenizer
 from nanochat.dataloader_jax import tokenizing_distributed_data_loader
 
@@ -59,47 +57,40 @@ model_config_kwargs = dict(
 )
 
 model_config = GPTConfig(**model_config_kwargs)
-pt_model = GPT(model_config)
-pt_model.init_weights()
-pt_model = pt_model.to(dtype=torch.bfloat16) # Cast model to bfloat16
+rngs = nnx.Rngs(0)
+model = GPT(model_config, rngs=rngs)
+print0("NNX Model initialized successfully.")
 
-print0("Wrapping model with torchax and extracting JAX parameters...")
-model = pt_model.to('jax')
-params, apply_fn = torchax.extract_jax(model)
-print0("Model loaded and parameters extracted successfully.")
-
-# --- Optimizer and TrainState ---
-class TrainState(train_state.TrainState):
-    # A simple extension of TrainState to hold any additional state we might need
-    pass
-
-def create_train_state(params, apply_fn):
-    """Creates initial TrainState."""
+# --- Optimizer ---
+def create_optimizer_state(model):
+    """Creates initial optimizer state."""
     learning_rate = 0.004 # A common default
     tx = optax.adamw(learning_rate=learning_rate)
-    return TrainState.create(apply_fn=apply_fn, params=params, tx=tx)
+    graphdef, params = nnx.split(model)
+    return tx.init(params), tx
 
 # --- JAX Training Step ---
-def train_step(state, batch):
-    def loss_fn(params):
-        logits = state.apply_fn(params, batch['inputs'])
-        loss = optax.softmax_cross_entropy_with_integer_labels(
-            logits=logits.reshape(-1, logits.shape[-1]),
-            labels=batch['targets'].reshape(-1)
-        ).mean()
-        return loss
+def train_step(model, optimizer_state, optimizer, batch):
+    def loss_fn(model):
+        return model(batch['inputs'], targets=batch['targets'])
 
     grad_fn = jax.value_and_grad(loss_fn)
-    loss, grads = grad_fn(state.params)
+    loss, grads = grad_fn(model)
     
     # Average loss and gradients across all devices
     loss = jax.lax.pmean(loss, axis_name='batch')
     grads = jax.lax.pmean(grads, axis_name='batch')
     
-    state = state.apply_gradients(grads=grads)
-    return state, loss
+    graphdef, params = nnx.split(model)
+    _, grads_params = nnx.split(grads)
+    
+    updates, optimizer_state = optimizer.update(grads_params, optimizer_state, params)
+    params = optax.apply_updates(params, updates)
+    model = nnx.merge(graphdef, params)
+    
+    return model, optimizer_state, loss
 
-p_train_step = jax.pmap(train_step, axis_name='batch')
+p_train_step = jax.pmap(train_step, axis_name='batch', in_axes=(0, 0, None, 0))
 
 # --- Main Execution ---
 def main():
@@ -108,10 +99,11 @@ def main():
     use_dummy_wandb = run_name == "dummy" or not master_process
     wandb_run = wandb.init(project="nanochat", name=run_name) if not use_dummy_wandb else type("DummyWandb", (object,), {"log": lambda *args, **kwargs: None, "finish": lambda: None})()
 
-    print0("\n--- Initializing Optimizer and TrainState ---")
-    state = create_train_state(params, apply_fn)
-    state = flax.jax_utils.replicate(state)
-    print0("✅ Optimizer and TrainState initialized and replicated successfully.")
+    print0("\n--- Initializing Optimizer ---")
+    optimizer_state, optimizer = create_optimizer_state(model)
+    model = flax.jax_utils.replicate(model)
+    optimizer_state = flax.jax_utils.replicate(optimizer_state)
+    print0("✅ Optimizer initialized and state replicated successfully.")
 
     print0("\n--- Initializing Data Loader ---")
     # Calculate the global batch size in terms of sequences for one forward/backward pass
@@ -136,7 +128,7 @@ def main():
         
         x, y = next(train_iter) # Fetch batch
         batch = {'inputs': x.copy(), 'targets': y.copy()} # Ensure writable copies
-        state, loss = p_train_step(state, batch)
+        model, optimizer_state, loss = p_train_step(model, optimizer_state, optimizer, batch)
         
         dt = time.time() - t0
         total_training_time += dt
