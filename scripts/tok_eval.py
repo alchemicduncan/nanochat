@@ -144,9 +144,11 @@ Photosynthesis is a photochemical energy transduction process in which light-har
 """.strip()
 
 # The tokenizer was trained on data from earlier shards, so it has seen this data
-train_docs = next(iter(parquets_iter_batched(split="train")))
+train_dataset = parquets_iter_batched(split="train").take(100) # take 100 docs
+train_docs = [tensor.numpy().decode('utf-8') for tensor in train_dataset]
 train_text = "\n".join(train_docs)
-val_docs = next(iter(parquets_iter_batched(split="val")))
+val_dataset = parquets_iter_batched(split="val").take(100) # take 100 docs
+val_docs = [tensor.numpy().decode('utf-8') for tensor in val_dataset]
 val_text = "\n".join(val_docs)
 
 all_text = [

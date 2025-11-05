@@ -98,6 +98,9 @@ def parquets_iter_batched(split, start=0, step=1):
         num_parallel_calls=tf.data.AUTOTUNE
     )
     
+    # Filter out empty tensors before unbatching
+    dataset = dataset.filter(lambda x: tf.size(x) > 0)
+
     # The output is now a dataset of text batches (one batch per row group).
     # We unbatch to get a stream of individual documents.
     dataset = dataset.unbatch()
