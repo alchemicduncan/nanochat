@@ -70,11 +70,11 @@ gpu = [
 ]
 tpu = [
     "torch>=2.8.0",
-    "torchax>=0.0.7",
     "jax[tpu]",
     "flax",
     "optax",
     "tensorflow-cpu",
+    "msgpack",
 ]
 
 [tool.uv]
