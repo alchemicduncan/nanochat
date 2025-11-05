@@ -13,9 +13,6 @@ from flax.experimental import nnx
 import optax
 import wandb
 
-# Enable torchax globally for PyTorch-JAX interoperability
-torchax.enable_globally()
-
 from nanochat.common import print0, print_banner, get_base_dir
 from nanochat.gpt_nnx import GPT, GPTConfig
 from nanochat.tokenizer import get_tokenizer

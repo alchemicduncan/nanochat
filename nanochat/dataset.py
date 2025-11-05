@@ -52,6 +52,8 @@ def _read_row_group_py(filepath_tensor, rg_idx_tensor):
     pf = pq.ParquetFile(filepath)
     rg = pf.read_row_group(rg_idx)
     texts = rg.column('text').to_pylist()
+    # filter out empty strings
+    texts = [text for text in texts if text]
     return texts
 
 def parquets_iter_batched(split, start=0, step=1):
